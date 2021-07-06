@@ -6,6 +6,8 @@
 # f1: SNR  f2: subsample size for CV, i.e. 'subpct' of all location for hold-out
 #------load library-------
 
+# a way to intall packages that do not exist.
+
 # list.of.packages <- c("MASS","pscl","mvtnorm","coda",
 #                       "matrixStats","FRK","sp","ggplot2",
 #                       "gridExtra","INLA","splancs","matrixsampling","cIRT")
@@ -302,14 +304,14 @@ for(SNR in c(3,5,10)){
     }
   }
 #}
-save.image("/gpfs/home/qz16b/prj2V2_0.RData")
+#save.image("/gpfs/home/qz16b/prj2V2_0.RData")
 
 
 # #analysis -------
-# # pro2_600 only contains SNR=3,5 quantile=0.1,0.5,0.9
-# mydata = read.table("pro2_600.txt",na.strings="NA")
-# mydata1 = mydata[,c(2,3,4,5)]
-# colnames(mydata1) = c("rspMn","rspMn","SNR","esplison")
+# mydata = read.table("C:/0_EE/research/project2_github/hpc_project2/results/simulation3510.txt",fill = TRUE)
+# head(mydata)
+# mydata1 = mydata[complete.cases(mydata),2:5]
+# colnames(mydata1) = c("rspTrn","rspUntrn","SNR","esplison")
 # 
 # mydata1$SNR = factor(mydata1$SNR,
 #                      levels=unique(mydata1$SNR))
@@ -320,33 +322,64 @@ save.image("/gpfs/home/qz16b/prj2V2_0.RData")
 # library(ggplot2)
 # library(latex2exp)
 # 
-# #response: median
+# #response: median+ Trn----
 # #boxplot
 # 
-# p1 = ggplot(mydata1, aes(x=SNR , y=rspMd, fill=SNR )) + 
+# p1 = ggplot(mydata1, aes(x=SNR , y=rspTrn, fill=SNR )) +
 #   geom_boxplot(alpha=0.3) +
 #   theme(legend.position="none") +
 #   scale_fill_brewer(palette="Blues")+
 #   geom_hline(yintercept = 0, color="red")+
-#   labs(y="ResponseMd", x = "SNR")
+#   labs(y="ResponseTrn", x = "SNR")
 # print(p1)
 # 
-# p2 = ggplot(mydata1, aes(x=esplison, y=rspMd, fill=esplison)) + 
+# p2 = ggplot(mydata1, aes(x=esplison, y=rspTrn, fill=esplison)) +
 #   geom_boxplot(alpha=0.3) +
 #   theme(legend.position="none") +
 #   scale_fill_brewer(palette = "Greens")+
 #   geom_hline(yintercept = 0, color="red")+
-#   labs(y="ResponseMd", x = TeX("$d$-th Percentile"))
+#   labs(y="ResponseTrn", x = TeX("$d$-th Percentile"))
 # 
 # print(p2)
 # 
 # 
 # # interaction plot
-# p3 = ggplot(mydata1, aes(x = SNR, y =rspMd)) +
+# p3 = ggplot(mydata1, aes(x = SNR, y =rspTrn)) +
 #   stat_summary(aes(group =esplison, color = esplison),
 #                fun = "mean", geom = "line", size = 1)+
-#   labs(y="ResponseMd", x = "SNR",color=TeX("$d$-th Percentile"))
+#   labs(y="ResponseTrn", x = "SNR",color=TeX("$d$-th Percentile"))
 # 
 # print(p3)
+# 
+# 
+# 
+# #response: mean Untrn----
+# #boxplot
+# 
+# p4 = ggplot(mydata1, aes(x=SNR , y=rspUntrn, fill=SNR )) +
+#   geom_boxplot(alpha=0.3) +
+#   theme(legend.position="none") +
+#   scale_fill_brewer(palette="Blues")+
+#   geom_hline(yintercept = 0, color="red")+
+#   labs(y="ResponseUntrn", x = "SNR")
+# print(p4)
+# 
+# p5 = ggplot(mydata1, aes(x=esplison, y=rspUntrn, fill=esplison)) +
+#   geom_boxplot(alpha=0.3) +
+#   theme(legend.position="none") +
+#   scale_fill_brewer(palette = "Greens")+
+#   geom_hline(yintercept = 0, color="red")+
+#   labs(y="ResponseUntrn", x = TeX("$d$-th Percentile"))
+# 
+# print(p5)
+# 
+# 
+# # interaction plot
+# p6 = ggplot(mydata1, aes(x = SNR, y =rspUntrn)) +
+#   stat_summary(aes(group =esplison, color = esplison),
+#                fun = "mean", geom = "line", size = 1)+
+#   labs(y="ResponseUntrn", x = "SNR",color=TeX("$d$-th Percentile"))
+# 
+# print(p6)
 
 
