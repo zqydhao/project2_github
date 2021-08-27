@@ -1,21 +1,15 @@
 #######################################################
-#version 2.0
-#######################################################
-# fixed epl:  epl = matrix(var(Y)/SNR,1,B)
-# fixed epsolion = 0.5
-# f1: SNR  f2: subsample size for CV, i.e. 'subpct' of all location for hold-out
-#------load library-------
+#version 3.1
+#change simulated sample size to be 100,1000
 
-# a way to intall packages that do not exist.
+#simuated data Y = X\beta+w; w~N(0, exp(-thetaV*DistMat))
+#Gibbs Z = X\beta+S\eta+\Ts
 
-# list.of.packages <- c("MASS","pscl","mvtnorm","coda",
-#                       "matrixStats","FRK","sp","ggplot2",
-#                       "gridExtra","INLA","splancs","matrixsampling","cIRT")
-# 
-# new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-# if(length(new.packages)) install.packages(new.packages)
+#fixed the error when updating Ts[-inx,i] according to
+# the fiveminutes paper algorithm1
+######################################################
 
-
+#1#-----load library-------
 library(MASS)
 library(pscl)
 library(mvtnorm)
@@ -26,155 +20,192 @@ library(FRK)
 library(sp)
 library(ggplot2)
 library(gridExtra)
-library(INLA)
+#library(INLA)
 library(splancs)
 
 library(matrixsampling)
 library(cIRT)
-#-------load data-------
 
-# setwd("F:/ky/code6-gibbs_sampling")
-# #setwd("C:/Users/bradley/Desktop/Students/Qingying")
-# mydata<-read.table("lithology.txt",na.strings="NA")
-# set.seed(2000)
-# N = 112
-# #covariates
-# X0=matrix(1,N,1)
-# X1 = mydata[,3] #Surf Elevation (ft amsl)
-# X2 = mydata[,5] #A-B Elevation (ft amsl)
-# X = cbind(X0,X1,X2)
+#2#-----simulated data-------
+
+# for (N in c(1e2,1e3,1e4)){        #simulated dataset size
+simuData = function(seed, N=1e3, thetaV = 3, psV = 1){
+  set.seed(seed)
+  #betastar = mvrnorm(1, matrix(0,3,1), diag(3), tol = 1e-3) #!reason i stucked
+  betastar = matrix(rnorm(3),3,1)
+  ind = seq_len(N)
+  x1 = ind/N
+  X = cbind(1,x1,x1^2)
+  Xbstar = X%*%betastar
+  
+  #locations = matrix(runif(2*N),N,2)
+  locations = round( matrix(runif(2*N),N,2),3)
+  colnames(locations) = c("North","East")
+  DistMat = as.matrix(dist(locations, method = "euclidean"))
+  
+  # thetaV = 3
+  covV = psV*exp(-thetaV*DistMat)  #effective range= 3/phi
+  V = mvrnorm(1, matrix(0,N,1),covV, tol = 1e-3)
+  
+  c = as.numeric(sqrt(var(V)/var(Xbstar)))
+  Xbeta = c*Xbstar
+  
+  Y = as.vector(Xbeta+V)
+  
+  # #Divide the screen in 2 line and 2 columns
+  # par(
+  #   mfrow=c(2,2), 
+  #   oma = c(0, 0, 2, 0)
+  # ) 
+  # #Make the margin around each graph a bit smaller
+  # par(mar=c(4,4,4,4))
+  # plot(ind, V)
+  # plot(ind, Xbeta)
+  # plot(ind,Y)
+  # hist(Y)
+  # mtext(paste("N=",N,"thetaV =",fractions(thetaV),"seed =",seed,"psV=",psV) ,outer = T, cex = 1.5 )
+  
+  backlist =  list(X=X,locations=locations,Y=Y,X=X)
+  return(backlist)
+}
+
+# a1 = simuData(seed = 1234, N=1e3, thetaV = 1/3)
+# a2 = simuData(seed = 1234, N=1e3, thetaV = 3)
+# a3 = simuData(seed = 1234, N=1e3, thetaV = 9)
+# a4 = simuData(seed =3000, N=1e3, thetaV = 1/3)
+
+#aa1 = simuData(seed = 3000, N = 1e2, thetaV = 3)
+aa2 = simuData(seed = 3000, N = 1e3, thetaV = 3)
+
+#### 3-ploting#
+# a = a5
+# a_df = as.data.frame(cbind(as.matrix(a[["Y"]]),a[["locations"]]))
+# # ggplot(a_df,aes(x=North,y=East))+
+# #   geom_point(col="red")+
+# #   coord_equal()
+# library(plotly)
+# plot_ly(x=a_df[,"North"], y=a_df[,"East"], z=a_df[,"V1"], type="scatter3d", mode="markers",color=a_df[,"North"])
+
+#3#-----Gibbs part-------
 # 
-# #Data, locations, distance matrix
-# Y = log(mydata[,4])   #log of Thickness(ft)   
-# locations = mydata[,1:2] #Northing and Easting
-# 
-# loctrans= cbind((locations[,1]-min(locations[,1]))/max(locations[,1]-min(locations[,1])),(locations[,2]-min(locations[,2]))/max(locations[,2]-min(locations[,2])))
-# locations=loctrans
-load("C:/00_EE/old_laptop/ky/dropbox/0_UPDATE_zqy/codes/0902model1_a_FIXED/simulation_20_1.RData")
-rm(list=setdiff(ls(), c("X","locations","Y","N")))
+a = aa2
+X = a[["X"]]
+Y = a[["Y"]]
+locations = a[["locations"]]
+N = length(Y)
 
-colnames(locations) = c("North","East")
-
-#DistMat = as.matrix(dist(locations, method = "euclidean"))
+#  
 p = dim(X)[2]
-
-
-#loops------
+B = 10000
+burnin = 2000
 epsilon = 0.5
-nj = 100 #repeat times
 
+
+nj=100#repeat times
 response  <- matrix(NA,nj*3*3,2)
-
 fct1 = matrix(0,nj*3*3,1)
 fct2 = matrix(0,nj*3*3,1)
 
 count = 0
 
-# #subsample size for CV, i.e. 20% of all location for hold-out 
-# sub = floor(N*0.8)
-# sub_hd = N-sub
 
 
-n = 112
-B = 10000
-burnin = 2000
-
-
-# # #
 # SNR=3
-# subpct=0.25
-#  j=1
+# subpct=0.1
+#nj=5
 
 for(SNR in c(3,5,10)){
   epl =  var(Y)/SNR
+  #set.seed(10) # by doing so,no matter you run together or separately for SNR you CANT get the same result(hpc cases)
   for(subpct in c(0.1,0.25,0.5)){ #percentage for holdout sample size
     for(j in 1:nj){
-     # setup-----
-      Z = Y+(sqrt(var(Y))/sqrt(SNR))*rnorm(N) 
+      # setup-----
+      Z = Y+sqrt(epl)*rnorm(N) 
       ZXlmat = cbind(matrix(Z),X,locations)
       
       Zldat = data.frame(cbind(Z,locations))
-	    coordinates(Zldat) = ~North+East
-	    basis <- auto_basis(plane(),          # we are on the plane
-	                        data = Zldat,       # data around which to make basis
-	                        nres = 2,
-	                        type = "bisquare",
-	                        scale_aperture = 1.25)   # bisquare(radial) basis functions
-	    #show_basis(basis)
-	    
-	    S = as.matrix(eval_basis(basis,  Zldat))
-	    r = dim(S)[2]
-	    
-	    #1.full Gibbs part------
-	    Etas = matrix(0,r,B) 
-	    betas = matrix(0,p,B)
-	    taus =  matrix(1,1,B) #variance for Xi
-	    K = riwishart(500, diag(r))
-	    Ts = matrix(0,n,B)
-	    
-	    StS = crossprod(S) #t(S)%*%S
-	    XtX = crossprod(X)
-	    
-	    for(i in 2:B){
-	      #update-------
-	      #update eta
-	      XbetasB = X%*%betas[,(i-1)]
-	      Etcovar <- solve(StS*(1/epl) +solve(K))  
-	      Etmean <- (1/epl)*(Etcovar%*%crossprod(S,(Z-XbetasB-Ts[,(i-1)])) )
-	      Etas[,i] <- as.matrix(mvrnorm(1, Etmean, Etcovar, tol = 1e-3))
-	      
-	      SEt <- as.matrix(S%*%Etas[,i])
-	      
-	      # update Ts
-	      Tscovar <- 1/(1/epl+1/taus[i-1])
-	      Tsmean <- (1/epl)*(Tscovar*(Z-XbetasB-SEt))
-	      Ts[,i]  <- as.matrix(Tsmean+sqrt(Tscovar)*rnorm(n)) 
-	      
-	      #update betas
-	      BetAcovar <- solve((1/epl)*XtX+1/10)
-	      BetAmean <- (1/epl)*BetAcovar%*%crossprod(X,(Z-SEt-Ts[,i]) ) #Xo.T%*%(Zo-SoEt-Tso[,(i-1)])
-	      betas[,i] <- mvrnorm(1, BetAmean, BetAcovar, tol = 1e-3)
-
-	      #update taus (variance for Ts)
-	      alphaTau <- 1+n/2
-	      betaTau <- 0.01 + 0.5*crossprod(Ts[,i]) #(t(Tso[,i])%*%Tso[,i])
-	      taus[i]<- rigamma(1,alphaTau,betaTau)
-	      
-	      #update K
-	      Kdgree <- 500+r
-	      Kscale <- diag(r)+tcrossprod(Etas[,i]) #Etas[,i]%*%t(Etas[,i])
-	      K <- riwishart(Kdgree, Kscale)
-	      
-	    }
-	    
-	    # traditional full model without truncation
-	    Ys = X%*%betas + S%*%Etas + Ts
-	    postmnY  = apply(Ys[,(burnin+1):B],1,mean)
-	    
-	    
-      #2.method part------
-	    
-	    #initial
-	    CVtrack = matrix(1,1,B)
-	    yhat_alltrn= matrix(0,n,B)
-
-	    Etas = matrix(0,r,B) 
-	    betas = matrix(0,p,B)
-	    taus =  matrix(1,1,B) #variance for Xi
-	    K = riwishart(500, diag(r))
-	    Ts = matrix(0,n,B)
-	    
-	    Etas2 = matrix(0,r,B) 
-	    betas2 = matrix(0,p,B)
-	    taus2 =  matrix(1,1,B) #variance for Xi
-	    Ts2 = matrix(0,n,B)
-	    
+      coordinates(Zldat) = ~North+East
+      basis <- auto_basis(plane(),              # we are on the plane
+                          data = Zldat,         # data around which to make basis
+                          nres = 2, # max_basis = 100,
+                          type = "bisquare",    # bisquare(radial) basis functions
+                          scale_aperture = 1.25,
+      )   
+      #show_basis(basis)
+      
+      S = as.matrix(eval_basis(basis,  Zldat))
+      r = dim(S)[2]
+      
+      #3.1#full Gibbs part----
+      Etas = matrix(0,r,B) 
+      betas = matrix(0,p,B)
+      taus =  matrix(1,1,B) #variance for Xi
+      K = riwishart(500, diag(r))
+      Ts = matrix(0,N,B)
+      
+      StS = crossprod(S) #t(S)%*%S
+      XtX = crossprod(X)
+      
+      for(i in 2:B){
+        #update-------
+        #update eta
+        XbetasB = X%*%betas[,(i-1)]
+        Etcovar <- solve(StS*(1/epl) +solve(K))  
+        Etmean <- (1/epl)*(Etcovar%*%crossprod(S,(Z-XbetasB-Ts[,(i-1)])) )
+        Etas[,i] <- as.matrix(mvrnorm(1, Etmean, Etcovar, tol = 1e-3))
+        
+        SEt <- as.matrix(S%*%Etas[,i])
+        
+        # update Ts
+        Tscovar <- 1/(1/epl+1/taus[i-1])
+        Tsmean <- (1/epl)*(Tscovar*(Z-XbetasB-SEt))
+        Ts[,i]  <- as.matrix(Tsmean+sqrt(Tscovar)*rnorm(N)) 
+        
+        #update betas
+        BetAcovar <- solve((1/epl)*XtX+1/10)
+        BetAmean <- (1/epl)*BetAcovar%*%crossprod(X,(Z-SEt-Ts[,i]) ) #Xo.T%*%(Zo-SoEt-Tso[,(i-1)])
+        betas[,i] <- mvrnorm(1, BetAmean, BetAcovar, tol = 1e-3)
+        
+        #update taus (variance for Ts)
+        alphaTau <- 1+N/2
+        betaTau <- 0.01 + 0.5*crossprod(Ts[,i]) #(t(Tso[,i])%*%Tso[,i])
+        taus[i]<- rigamma(1,alphaTau,betaTau)
+        
+        #update K
+        Kdgree <- 500+r
+        Kscale <- diag(r)+tcrossprod(Etas[,i]) #Etas[,i]%*%t(Etas[,i])
+        K <- riwishart(Kdgree, Kscale)
+        
+      }
+      
+      # traditional full model without truncation
+      Ys = X%*%betas + S%*%Etas + Ts
+      postmnY  = apply(Ys[,(burnin+1):B],1,mean)
+      
+      
+      #3.2#method part------
+      
+      #initial
+      CVtrack = matrix(1,1,B)
+      yhat_alltrn= matrix(0,N,B)
+      
+      Etas = matrix(0,r,B) 
+      betas = matrix(0,p,B)
+      taus =  matrix(1,1,B) #variance for Xi
+      K = riwishart(500, diag(r))
+      Ts = matrix(0,N,B)
+      
+      Etas2 = matrix(0,r,B) 
+      betas2 = matrix(0,p,B)
+      taus2 =  matrix(1,1,B) #variance for Xi
+      Ts2 = matrix(0,N,B)
+      
       #cross-validation and then truncated by quantile
-	    #5-min with un-truncation
+      #5-min with un-truncation
       for (i in 2:B){
         #subsample step
-        sub_hd = floor(n*subpct)
-        sub = n-sub_hd
+        sub_hd = floor(N*subpct)
+        sub = N-sub_hd
         
         subsmp_ind =  sample(seq_len(nrow(ZXlmat)), size = sub)
         subsmp =  ZXlmat[subsmp_ind, ]
@@ -184,14 +215,14 @@ for(SNR in c(3,5,10)){
         
         Zo = subsmp[,1]
         Xo = subsmp[,2:4]
-       
+        
         Zm = subhd[,1]
         Xm = subhd[,2:4]
         
-       
-        So = eval_basis(basis,  Zldat[subsmp_ind,]) #So:to evalute S.o at BAUs. dim(S)=(N,r)
-        Sm = eval_basis(basis,  Zldat[-subsmp_ind,])
- 
+        
+        So = as.matrix(eval_basis(basis,  Zldat[subsmp_ind,]) ) #So:to evalute S . dim(S)=(N,r)
+        Sm = as.matrix(eval_basis(basis,  Zldat[-subsmp_ind,]))
+        
         SotSo = crossprod(So) #t(So)%*%So
         XotXo=crossprod(Xo)
         
@@ -211,19 +242,19 @@ for(SNR in c(3,5,10)){
         # Tsomean <- (1/epl)*(Tsocovar*(Zo-Xo%*%betas[,i]-SoEt))
         # Tso[,i] <- as.matrix(Tsomean+sqrt(Tsocovar)*rnorm(sub))
         
-        # update Ts
+        # update Ts (using reverse jump)
         Tsocovar <- 1/(1/epl+1/taus[i-1])
         Tsomean <- (1/epl)*(Tsocovar*(Zo-XobetasB-SoEt))
         Ts[inx,i]  <- as.matrix(Tsomean+sqrt(Tsocovar)*rnorm(sub)) #Tso[,i]
-        Ts[-inx,i] <- mvrnorm(1, matrix(0,sub_hd,1), taus[i]*diag(sub_hd), tol = 1e-3)
-        Ts2[,i] = Ts[,i]  
+       # Ts[-inx,i] <- mvrnorm(1, matrix(0,sub_hd,1), taus[i]*diag(sub_hd), tol = 1e-3)
+       # Ts2[,i] = Ts[,i]  
         
         #update betas
         BetAcovar <- solve((1/epl)*XotXo+1/10)
         BetAmean <- (1/epl)*BetAcovar%*%crossprod(Xo,(Zo-SoEt-Ts[inx,i]) ) #Xo.T%*%(Zo-SoEt-Tso[,(i-1)])
         betas[,i] <- mvrnorm(1, BetAmean, BetAcovar, tol = 1e-3)
         betas2[,i] =  betas[,i]
-
+        
         #update taus (variance for Ts)
         alphaTau <- 1+sub/2
         betaTau <- 0.01 + 0.5*crossprod(Ts[inx,i]) #(t(Tso[,i])%*%Tso[,i])
@@ -241,8 +272,8 @@ for(SNR in c(3,5,10)){
         K <- riwishart(Kdgree, Kscale)
         
         # #update Tsm
-        # Tsm[,i] <- mvrnorm(1, matrix(0,sub_hd,1), taus[i]*diag(sub_hd), tol = 1e-3)
-        
+        Ts[-inx,i] <- mvrnorm(1, matrix(0,sub_hd,1), taus[i]*diag(sub_hd), tol = 1e-3)
+        Ts2[,i] = Ts[,i]  
         
         yhat_hd = as.matrix(Xm%*%betas[,i] + Sm%*%Etas[,i]+ Ts[-inx,i])
         CV = sqrt(mean(crossprod(Zm-yhat_hd)))
@@ -257,7 +288,7 @@ for(SNR in c(3,5,10)){
       # plot(mcmc(sigma2s[1,]))
       
       epsil = quantile(CVtrack[(burnin+1):B],epsilon)
-
+      
       counter2 = 0
       for (i in 2:B){
         if (CVtrack[i] > epsil) {
@@ -269,20 +300,19 @@ for(SNR in c(3,5,10)){
           Ts[,i] = Ts2[,(i-1)]
           counter2 = counter2+1
         }
-          #Ts[inx[,i],] = Tso[,i]
-          #Ts[-inx[,i],] = Tsm[,i]
-          yhat_alltrn[,i] = as.matrix(X%*%betas[,i] + S%*%Etas[,i]+ Ts[,i])
-          
+        
+        yhat_alltrn[,i] = as.matrix(X%*%betas[,i] + S%*%Etas[,i]+ Ts[,i])
+        
       }
       
       
-      #comparision------
+      #4#-----comparision------
       
       # 5-min method with truncation(posterior median)
       #yhat_hd_trn = apply(yhat_hd_trn[,(burnin+1):B],1,median) 
       #yhat_alltrn.final2 = rowMeans(yhat_alltrn[,(burnin+1):B])
       yhat_all_Mtrn = rowMedians(yhat_alltrn[,(burnin+1):B])
-    
+      
       #5-min method with un-truncation (posterior mean)
       Ymethod = X%*%betas2 + S%*%Etas2 + Ts2  ##!!!##(mistake for version 1.0) when working on Version 2.0.should be Etas2 not Etas2[,i] 
       yhat_all_Munt  = apply(Ymethod[,(burnin+1):B],1,mean) 
@@ -295,20 +325,21 @@ for(SNR in c(3,5,10)){
       
       response[count,1]  = crossprod(Y-yhat_all_Mtrn) - crossprod(Y-postmnY)
       response[count,2]  = crossprod(Y-yhat_all_Munt) - crossprod(Y-postmnY)
+      #print(crossprod(Y-postmnY))
       #response[count]=t(Y-yhat.final)%*%(Y-yhat.final) - t(Y-postmnY)%*%(Y-postmnY)
       fct1[count] = SNR
       fct2[count] = subpct
       
       print(c(response[count,],SNR,subpct,count,counter2))
-      }
     }
   }
-#}
-#save.image("/gpfs/home/qz16b/prj2V2_0.RData")
+}
+#save.image("/gpfs/home/qz16b/prj2V3_1_Ne2.RData")
 
 
-# #analysis -------
-# mydata = read.table("C:/0_EE/research/project2_github/hpc_project2/results/simulation3510.txt",fill = TRUE)
+#5#------analysis -------
+# mydata = read.table("C:/00_EE/research/project2_github/hpc_project2/results/simulation3_Ne2_3510.txt",fill = TRUE)
+# #mydata = read.table("C:/00_EE/research/project2_github/hpc_project2/results/simulation3_Ne3_3510 .txt.txt",fill = TRUE)
 # head(mydata)
 # mydata1 = mydata[complete.cases(mydata),2:5]
 # colnames(mydata1) = c("rspTrn","rspUntrn","SNR","esplison")
@@ -381,5 +412,3 @@ for(SNR in c(3,5,10)){
 #   labs(y="ResponseUntrn", x = "SNR",color=TeX("$d$-th Percentile"))
 # 
 # print(p6)
-
-
